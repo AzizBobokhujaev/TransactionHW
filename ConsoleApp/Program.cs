@@ -1,0 +1,320 @@
+﻿using System;
+using System.Data.SqlClient;
+
+namespace ConsoleApp
+{
+    class Program
+    {
+        static void Main(string[] args)
+        {
+            var conString = "" +
+                "Data source=localhost; " +
+                "Initial catalog=AcademySummer; " +
+                "user id=sa; " +
+                "password=123456";
+            var working = true;
+            while (working)
+            {
+                Console.Write("0. Exit\n1. Create client\n2. Create Account\n3. Client list\n4. Transfer from acc to acc\n5. Check balance\nChoice:");
+                int.TryParse(Console.ReadLine(), out var choice);
+                switch (choice)
+                {
+                    case 1:
+                        {
+                            CreateClient(conString);
+                        }
+                        break;
+                    case 2:
+                        break;
+                    case 3:
+                        {
+                            ListClient(conString);
+                        }
+                        break;
+                    case 4:
+                        {
+                                var fromAcc = "";
+                                var fromAccId = 0;
+                                 var count = 0;
+                                while (fromAccId == 0)
+                                {
+                                if (count == 3) { Console.WriteLine("Попробуйте через 5-мин"); return; }
+                                count++;
+                                Console.Write("From account:");
+                                    fromAcc = Console.ReadLine();
+                                    fromAccId = GetAccountId(fromAcc, conString);
+                                if (fromAccId == 0) { Console.WriteLine($"Account { fromAcc } not found"); }
+                           
+
+                                }
+ 
+                                var toAcc = "";
+                                var toAccId = 0;
+                                count = 0;
+                                while (toAccId == 0)
+                                {
+                                if (count == 3) { Console.WriteLine("Попробуйте через 5-мин"); return; }
+                                count++;
+                                Console.Write("To account:");
+                                toAcc = Console.ReadLine();
+                                toAccId = GetAccountId(toAcc, conString);                                
+                                if (count == 4) { Console.WriteLine("Попробуйте через 5-мин"); return; }
+                            }
+                                Console.Write("Amount:");
+                                decimal.TryParse(Console.ReadLine(), out var amount);
+
+                                TransferFromToAcc(fromAcc, toAcc, amount, conString);
+                            
+                        }
+                        break;
+                    case 5:
+                        {
+                            Console.Write("Account:");
+                            var account = Console.ReadLine();
+                            var balance = GetAccountBalance(conString, account);
+                            Console.WriteLine($"Account balance: {balance}");
+                        }
+                        break;
+                    case 0:
+                        working = false;
+                        break;
+                    default:
+                        Console.WriteLine("Wrong command.");
+                        break;
+                }
+                Console.WriteLine("Press any key...");
+                Console.ReadLine();
+                Console.Clear();
+            }
+        }
+
+        private static decimal GetAccountBalance(string conString, string account)
+        {
+            var conn = new SqlConnection(conString);
+            conn.Open();
+            var command = conn.CreateCommand();
+            command.CommandText = "select sum( case when t.Type = 'C' then t.Amount * -1 else t.Amount end) from Transactions t left join Accounts a on t.Account_Id = a.Id where a.Number = @fromAcc";
+            command.Parameters.AddWithValue("@fromAcc", account);
+            var reader = command.ExecuteReader();
+            var fromAccBalance = 0m;
+
+            while (reader.Read())
+            {
+                fromAccBalance = !string.IsNullOrEmpty(reader.GetValue(0)?.ToString()) ? reader.GetDecimal(0) : 0;
+            }
+
+            reader.Close();
+            command.Parameters.Clear();
+
+            conn.Close();
+            return fromAccBalance;
+        }
+
+        private static void TransferFromToAcc(string fromAcc, string toAcc, decimal amount, string conString)
+        {
+            if (string.IsNullOrEmpty(fromAcc) || string.IsNullOrEmpty(toAcc) || amount == 0)
+            {
+                Console.WriteLine("Something went wrong.");
+                return;
+            }
+
+            var conn = new SqlConnection(conString);
+            conn.Open();
+
+            if (!(conn.State == System.Data.ConnectionState.Open))
+            {
+                return;
+            }
+
+            SqlTransaction sqlTransaction = conn.BeginTransaction();
+
+            var command = conn.CreateCommand();
+
+            command.Transaction = sqlTransaction;
+
+            try
+            {
+                var fromAccBalance = GetAccountBalance(conString, fromAcc);
+
+                if (fromAccBalance <= 0 || (fromAccBalance - amount) < 0)
+                {
+                    throw new Exception("From account balance not enough amount");
+                }
+
+                var fromAccId = GetAccountId(fromAcc, conString);
+
+                if (fromAccId == 0)
+                {
+                    throw new Exception("Account not found");
+                }
+
+                command.CommandText = "INSERT INTO [dbo].[Transactions]([Amount] ,[Type] ,[Created_At] ,[Account_Id]) VALUES (@amount , 'C' , @createdAt, @accountId)";
+                command.Parameters.AddWithValue("@amount", amount);
+                command.Parameters.AddWithValue("@createdAt", DateTime.Now);
+                command.Parameters.AddWithValue("@accountId", fromAccId);
+
+                var result1 = command.ExecuteNonQuery();
+
+                var toAccId = GetAccountId(toAcc, conString);
+
+                if (toAccId == 0)
+                {
+                    throw new Exception("Account not found");
+                }
+
+                command.Parameters.Clear();
+
+                command.CommandText = "INSERT INTO [dbo].[Transactions]([Amount] ,[Type] ,[Created_At] ,[Account_Id]) VALUES (@amount , 'D' , @createdAt, @accountId)";
+                command.Parameters.AddWithValue("@amount", amount);
+                command.Parameters.AddWithValue("@createdAt", DateTime.Now);
+                command.Parameters.AddWithValue("@accountId", toAccId);
+
+                var result2 = command.ExecuteNonQuery();
+
+                if (result1 == 0 || result2 == 0)
+                {
+                    throw new Exception("Something went wrong");
+                }
+
+                sqlTransaction.Commit();
+                Console.WriteLine("All done");
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine(ex.Message);
+
+                sqlTransaction.Rollback();
+            }
+            finally
+            {
+                conn.Close();
+            }
+        }
+
+        private static int GetAccountId(string number, string conString)
+        {
+            var accNumber = 0;
+            var connection = new SqlConnection(conString);
+            var query = "SELECT [Id] FROM [dbo].[Accounts] WHERE [Number] = @number";
+
+            var command = connection.CreateCommand();
+            command.Parameters.AddWithValue("@number", number);
+            command.CommandText = query;
+
+            connection.Open();
+
+            var reader = command.ExecuteReader();
+
+            while (reader.Read())
+            {
+                accNumber = reader.GetInt32(0);
+            }
+            connection.Close();
+            reader.Close();
+
+            return accNumber;
+        }
+
+        private static void CreateClient(string conString)
+        {
+            var client = new Client { FirstName = "test1", LastName = "test1", MiddleName = "", CreatedAt = DateTime.Now };
+
+            var connection = new SqlConnection(conString);
+            var query = "INSERT INTO [dbo].[Clients]([FirstName] ,[LastName] ,[MiddleName] ,[Created_At]) VALUES (@firstName ,@lastName ,@middleName ,@createdAt)";
+
+            var command = connection.CreateCommand();
+            command.CommandText = query;
+            command.Parameters.AddWithValue("@firstName", client.FirstName);
+            command.Parameters.AddWithValue("@lastName", client.LastName);
+            command.Parameters.AddWithValue("@middleName", client.MiddleName);
+            command.Parameters.AddWithValue("@createdAt", client.CreatedAt);
+
+            connection.Open();
+
+            var result = command.ExecuteNonQuery();
+
+
+
+            if (result > 0)
+            {
+                Console.WriteLine("Added successfully.");
+            }
+
+            connection.Close();
+        }
+
+        private static void ListClient(string conString)
+        {
+            Client[] clients = new Client[0];
+
+            var connection = new SqlConnection(conString);
+            var query = "SELECT [Id] ,[FirstName] ,[LastName] ,[MiddleName] ,[Created_At] ,[Updated_At] FROM [dbo].[Clients]";
+
+            var command = connection.CreateCommand();
+            command.CommandText = query;
+
+            connection.Open();
+
+            var reader = command.ExecuteReader();
+
+            while (reader.Read())
+            {
+                var client = new Client { };
+
+                client.Id = int.Parse(reader["Id"].ToString());
+                client.LastName = reader["LastName"].ToString();
+                client.FirstName = reader["FirstName"].ToString();
+                client.MiddleName = reader["MiddleName"].ToString();
+                var x = reader["Created_At"]?.ToString();
+                client.CreatedAt = !string.IsNullOrEmpty(reader["Created_At"]?.ToString()) ? DateTime.Parse(reader["Created_At"].ToString()) : null;
+                client.UpdatedAt = !string.IsNullOrEmpty(reader["Updated_At"]?.ToString()) ? DateTime.Parse(reader["Updated_At"].ToString()) : null;
+                AddClient(ref clients, client);
+            }
+            connection.Close();
+            foreach (var client in clients)
+            {
+                Console.WriteLine($"ID:{client.Id}, LastName:{client.LastName}, FirstName:{client.FirstName}, MiddleName:{client.MiddleName}, CreatedAt:{client.CreatedAt}, UpdatedAt:{client.UpdatedAt}");
+            }
+        }
+
+        private static void AddClient(ref Client[] clients, Client client)
+        {
+            if (clients == null)
+            {
+                return;
+            }
+
+            Array.Resize(ref clients, clients.Length + 1);
+
+            clients[clients.Length - 1] = client;
+        }
+    }
+
+    public class Client
+    {
+        public int Id { get; set; }
+        public string LastName { get; set; }
+        public string FirstName { get; set; }
+        public string MiddleName { get; set; }
+        public DateTime? CreatedAt { get; set; }
+        public DateTime? UpdatedAt { get; set; }
+    }
+
+    public class Account
+    {
+        public int Id { get; set; }
+        public int Number { get; set; }
+        public int ClientId { get; set; }
+        public DateTime CreatedAt { get; set; }
+        public DateTime? UpdatedAt { get; set; }
+    }
+
+    public class Transaction
+    {
+        public int Id { get; set; }
+        public decimal Amount { get; set; }
+        public string Type { get; set; }
+        public DateTime CreatedAt { get; set; }
+        public int AccountId { get; set; }
+    }
+}
